@@ -1,13 +1,37 @@
-[![pypi](https://img.shields.io/pypi/v/inventree-part-import)](https://pypi.org/project/inventree-part-import/)
 [![python](https://img.shields.io/badge/Python-3.10+-blue)](https://www.python.org/)
 [![mit](https://img.shields.io/badge/license-MIT-lightgrey)](LICENSE)
 
 # InvenTree Part Import
 
+> **This is a fork of [30350n/inventree_part_import](https://github.com/30350n/inventree_part_import)
+> patched for compatibility with InvenTree 1.x**, which reorganized several API endpoints and
+> renamed fields that the original tool relied on. Install this fork instead of the PyPI package
+> if you're running InvenTree 1.0 or later.
+
 This project offers a command line interface to easily import parts from suppliers like
 DigiKey, LCSC, Mouser, etc. into your InvenTree instance.
 
 ## Installation
+
+For InvenTree 1.x, install this fork directly:
+
+```console
+pipx install git+https://github.com/Badokas/inventree-part-import.git
+```
+
+Or with `uv`:
+
+```console
+uv tool install git+https://github.com/Badokas/inventree-part-import.git
+```
+
+If you already have the original installed, the `--force` flag will replace it:
+
+```console
+pipx install --force git+https://github.com/Badokas/inventree-part-import.git
+```
+
+For InvenTree 0.x, use the [original package](https://pypi.org/project/inventree-part-import/) instead:
 
 ```console
 pipx install inventree-part-import

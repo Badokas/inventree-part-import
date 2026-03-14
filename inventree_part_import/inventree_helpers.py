@@ -16,6 +16,7 @@ from platformdirs import user_cache_path
 from requests.compat import unquote, urlparse
 from requests.exceptions import ConnectionError, HTTPError, Timeout
 
+from . import inventree_compat as _  # noqa: F401 - patches inventree URLs for InvenTree 1.x
 from .retries import retry_timeouts
 
 INVENTREE_CACHE = user_cache_path(__package__, ensure_exists=True) / "inventree"
