@@ -6,7 +6,6 @@ from hashlib import sha256
 from typing import Any
 
 from error_helper import info, warning
-from fake_useragent import UserAgent
 from inventree.api import InvenTreeAPI
 from inventree.base import ImageMixin, InventreeObject, ParameterTemplate
 from inventree.company import Company as InvenTreeCompany, ManufacturerPart, SupplierPart
@@ -175,7 +174,10 @@ def _download_file_content(url: str):
     session = setup_session(use_tlsv1_2=True)
     session.headers.update(
         {
-            "User-Agent": UserAgent(os=["iOS"]).random,
+            "User-Agent": (
+                "Mozilla/5.0 (iPhone; CPU iPhone OS 17_4 like Mac OS X) "
+                "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Mobile/15E148 Safari/604.1"
+            ),
             "Accept-Language": "en-US,en",
         }
     )

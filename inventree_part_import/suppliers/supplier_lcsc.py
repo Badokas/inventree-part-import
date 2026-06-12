@@ -2,13 +2,22 @@ import re
 from types import MethodType
 from typing import Any
 
-from fake_useragent import UserAgent
 from requests.compat import quote
 from requests.exceptions import JSONDecodeError
 
 from .. import retries
 from ..exceptions import SupplierError
 from .base import REMOVE_HTML_TAGS, ApiPart, Supplier, SupplierSupportLevel
+
+# Static UA strings — avoids fake_useragent network calls and its noisy fallback messages
+_DESKTOP_UA = (
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
+)
+_MOBILE_UA = (
+    "Mozilla/5.0 (iPhone; CPU iPhone OS 17_4 like Mac OS X) "
+    "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Mobile/15E148 Safari/604.1"
+)
 
 
 class LCSC(Supplier):
@@ -169,7 +178,7 @@ class LCSCApi:
     def __init__(self, currency: str):
         self.session = retries.setup_session()
         self.session.headers.update(
-            {"User-Agent": UserAgent(os=["macos"]).random, "Accept-Language": "en-US,en",
+            {"User-Agent": _DESKTOP_UA, "Accept-Language": "en-US,en",
              "Referer": "https://www.lcsc.com/", "Origin": "https://www.lcsc.com"}
         )
         self.session.get(self.CURRENCY_URL.format(currency))

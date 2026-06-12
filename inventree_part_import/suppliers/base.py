@@ -8,7 +8,6 @@ from typing import Any, Callable, Literal, cast
 
 import browser_cookie3
 from error_helper import error, warning
-from fake_useragent import UserAgent
 from requests import Response, Session
 
 from ..config import get_config, get_pre_creation_hooks
@@ -182,9 +181,14 @@ class ScrapeSupplier(Supplier):
     def _setup_session(self):
         self.session = setup_session()
         self.session.cookies.update(self.cookies)  # pyright: ignore[reportUnknownMemberType]
-        # using iOS User-Agents seems to help to with mouser crawling
         self.session.headers.update(
-            {"User-Agent": UserAgent(os=["iOS"]).random, "Accept-Language": "en-US,en"}
+            {
+                "User-Agent": (
+                    "Mozilla/5.0 (iPhone; CPU iPhone OS 17_4 like Mac OS X) "
+                    "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Mobile/15E148 Safari/604.1"
+                ),
+                "Accept-Language": "en-US,en",
+            }
         )
 
         self.setup_hook()
