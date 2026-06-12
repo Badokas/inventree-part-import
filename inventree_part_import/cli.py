@@ -1,5 +1,7 @@
 import importlib.metadata
 import logging
+import re
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Literal, Never, ParamSpec, cast
 
@@ -219,7 +221,11 @@ def inventree_part_import(
             elif path.exists():
                 warning(f"skipping '{path}' (path exists, but is not a file)")
             else:
-                parts.append(name)
+                # bare C-number on CLI → route directly to LCSC, no MPN search
+                if LCSC_PART_NUMBER_RE.match(name.strip()):
+                    parts.append(PartEntry(mpn="", supplier_overrides={"lcsc": name.strip()}))
+                else:
+                    parts.append(name)
 
         parts = list(filter(bool, (part.strip() for part in parts)))
 
@@ -242,11 +248,16 @@ def inventree_part_import(
     try:
         last_import_result = None
         for index, part in enumerate(parts):
-            last_import_result = (
-                importer.import_part(part.name, part, supplier, only_supplier)
-                if isinstance(part, Part)
-                else importer.import_part(part, None, supplier, only_supplier)
-            )
+            if isinstance(part, Part):
+                last_import_result = importer.import_part(part.name, part, supplier, only_supplier)
+            elif isinstance(part, PartEntry):
+                last_import_result = importer.import_part(
+                    part.mpn, None, supplier, only_supplier,
+                    supplier_overrides=part.supplier_overrides,
+                    display_name=str(part),
+                )
+            else:
+                last_import_result = importer.import_part(part, None, supplier, only_supplier)
             print()
             match last_import_result:
                 case ImportResult.SUCCESS:
@@ -268,11 +279,16 @@ def inventree_part_import(
 
             importer.interactive = True
             for part in parts2:
-                import_result = (
-                    importer.import_part(part.name, part, supplier, only_supplier)
-                    if isinstance(part, Part)
-                    else importer.import_part(part, None, supplier, only_supplier)
-                )
+                if isinstance(part, Part):
+                    import_result = importer.import_part(part.name, part, supplier, only_supplier)
+                elif isinstance(part, PartEntry):
+                    import_result = importer.import_part(
+                        part.mpn, None, supplier, only_supplier,
+                        supplier_overrides=part.supplier_overrides,
+                        display_name=str(part),
+                    )
+                else:
+                    import_result = importer.import_part(part, None, supplier, only_supplier)
                 match import_result:
                     case ImportResult.SUCCESS:
                         pass
@@ -285,12 +301,12 @@ def inventree_part_import(
     finally:
         if failed_parts:
             failed_parts_str = "\n".join(
-                (part.name if isinstance(part, Part) else part for part in failed_parts)
+                (part.name if isinstance(part, Part) else str(part) for part in failed_parts)
             )
             error(f"the following parts failed to import:\n{failed_parts_str}\n", prefix="")
         if incomplete_parts:
             incomplete_parts_str = "\n".join(
-                (part.name if isinstance(part, Part) else part for part in incomplete_parts)
+                (part.name if isinstance(part, Part) else str(part) for part in incomplete_parts)
             )
             warning(f"the following parts are incomplete:\n{incomplete_parts_str}\n", prefix="")
 
@@ -315,7 +331,7 @@ def load_tabular_data(path: Path):
             return None
 
     mpn_headers = get_config().get(
-        "auto_detect_columns", ["Manufacturer Part Number", "MPN", "part_id"]
+        "auto_detect_columns", ["Manufacturer Part Number", "MPN", "part_id", "LCSC Part Number"]
     )
 
     headers = {
@@ -323,6 +339,37 @@ def load_tabular_data(path: Path):
         for i, header in enumerate(cast(list[str], data.headers))
         if (stripped := header.strip())
     }
+
+    # Check if we have an LCSC Part Number column alongside an MPN column
+    lcsc_col_index: int | None = None
+    mpn_col_index: int | None = None
+
+    if "LCSC Part Number" in headers:
+        lcsc_col_index = headers["LCSC Part Number"]
+        # Find the best MPN column (excluding the LCSC column itself)
+        mpn_candidates = [
+            h for h in headers
+            if h != "LCSC Part Number"
+            and any(fuzz.partial_ratio(h, m) >= 80 for m in mpn_headers if m != "LCSC Part Number")
+        ]
+        if mpn_candidates:
+            best_mpn = max(
+                mpn_candidates,
+                key=lambda h: max(
+                    fuzz.partial_ratio(h, m) for m in mpn_headers if m != "LCSC Part Number"
+                ),
+            )
+            mpn_col_index = headers[best_mpn]
+
+    if lcsc_col_index is not None and mpn_col_index is not None:
+        # Return PartEntry rows: LCSC supplier gets C-number, others get MPN
+        lcsc_col = cast(list[str], data.get_col(lcsc_col_index))
+        mpn_col = cast(list[str], data.get_col(mpn_col_index))
+        return [
+            PartEntry(mpn=mpn, supplier_overrides={"lcsc": lcsc_id})
+            for lcsc_id, mpn in zip(lcsc_col, mpn_col)
+        ]
+
     sorted_headers = sorted(
         headers,
         key=lambda header: max(fuzz.partial_ratio(header, mpn) for mpn in mpn_headers),
@@ -352,6 +399,23 @@ def load_single_column_csv(path: Path):
     info(f"importing '{path.name}' as single column csv file", end="\n")
     has_header = prompt_yes_or_no(f"is the first row '{data[0]}' a header?", default_is_yes=True)
     return data[1:] if has_header else data
+
+
+@dataclass
+class PartEntry:
+    """Carries a primary search term (MPN) plus optional supplier-specific overrides."""
+    mpn: str
+    supplier_overrides: dict[str, str]
+
+    def __str__(self):
+        # Display label: prefer MPN, fall back to the first override value
+        return self.mpn or next(iter(self.supplier_overrides.values()), "")
+
+    def strip(self):
+        return self
+
+
+LCSC_PART_NUMBER_RE = re.compile(r"^C\d+$", re.IGNORECASE)
 
 
 DRY_MODE_WARNING = (

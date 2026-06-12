@@ -69,12 +69,14 @@ class PartImporter:
         existing_part: Part | None = None,
         supplier_id: str | None = None,
         only_supplier: bool = False,
+        supplier_overrides: dict[str, str] | None = None,
+        display_name: str | None = None,
     ):
-        info(f"searching for {search_term} ...", end="\n")
+        info(f"searching for {display_name or search_term} ...", end="\n")
         import_result = ImportResult.SUCCESS
 
         self.existing_manufacturer_part = None
-        if (search_results := search(search_term, supplier_id, only_supplier)) is None:
+        if (search_results := search(search_term, supplier_id, only_supplier, supplier_overrides)) is None:
             return ImportResult.ERROR
 
         for supplier, async_results in search_results:

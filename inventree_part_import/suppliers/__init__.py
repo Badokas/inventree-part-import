@@ -15,7 +15,12 @@ from .base import ScrapeSupplier, Supplier
 _suppliers = None
 
 
-def search(search_term: str, supplier_id: str | None = None, only_supplier: bool = False):
+def search(
+    search_term: str,
+    supplier_id: str | None = None,
+    only_supplier: bool = False,
+    supplier_overrides: dict[str, str] | None = None,
+):
     global _suppliers
     if _suppliers is None:
         assert _supplier_companies is not None, "call setup_supplier_companies(...) first"
@@ -28,22 +33,32 @@ def search(search_term: str, supplier_id: str | None = None, only_supplier: bool
             )
         )
 
-    suppliers = list(_suppliers.values())
+    suppliers = list(_suppliers.items())
     if supplier_id:
-        if supplier := _suppliers.get(supplier_id):
+        if supplier_id in _suppliers:
             if only_supplier:
-                suppliers = [supplier]
+                suppliers = [(supplier_id, _suppliers[supplier_id])]
             else:
-                suppliers.remove(supplier)
-                suppliers.insert(0, supplier)
+                entry = (supplier_id, _suppliers[supplier_id])
+                suppliers.remove(entry)
+                suppliers.insert(0, entry)
         else:
             error(f"supplier id '{supplier_id}' not defined in {SUPPLIERS_CONFIG}")
             return None
 
     thread_pool = ThreadPool(processes=8)
     return (
-        (api_company, thread_pool.apply_async(supplier_object.cached_search, (search_term,)))
-        for supplier_object, api_company in suppliers
+        (
+            api_company,
+            thread_pool.apply_async(
+                supplier_object.cached_search,
+                # Use the supplier-specific override term if provided, else the default term
+                (supplier_overrides.get(sid, search_term) if supplier_overrides else search_term,),
+            ),
+        )
+        for sid, (supplier_object, api_company) in suppliers
+        # Skip suppliers that have no relevant term (empty override + no MPN)
+        if (supplier_overrides.get(sid, search_term) if supplier_overrides else search_term)
     )
 
 

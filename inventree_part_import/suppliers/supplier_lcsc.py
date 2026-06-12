@@ -24,6 +24,12 @@ class LCSC(Supplier):
         self.lcsc_api = LCSCApi(self.currency)
 
     def search(self, search_term: str) -> tuple[list[ApiPart], int]:
+        # LCSC part numbers resolve directly via product_detail, skipping the search endpoint
+        if LCSC_PART_NUMBER_REGEX.match(search_term):
+            if detail_result := self.lcsc_api.product_detail(search_term):
+                return [self.get_api_part(detail_result)], 1
+            return [], 0
+
         if not (result := self.lcsc_api.search(search_term)):
             return [], 0
 
@@ -32,9 +38,16 @@ class LCSC(Supplier):
                 return [self.get_api_part(detail_result)], 1
 
         elif products := result.get("productSearchResultVO"):
+            product_list = products["productList"]
+        elif product_list := result.get("exactMatchResult"):
+            pass
+        else:
+            return [], 0
+
+        if product_list is not None:
             filtered_matches = [
                 product
-                for product in products["productList"]
+                for product in product_list
                 if product["productModel"].lower().startswith(search_term.lower())
                 or product["productCode"].lower() == search_term.lower()
             ]
@@ -149,14 +162,15 @@ class LCSC(Supplier):
 
 class LCSCApi:
     API_BASE_URL = "https://wmsc.lcsc.com/ftps/wm/"
-    SEARCH_URL = f"{API_BASE_URL}search/v2/global"
+    SEARCH_URL = f"{API_BASE_URL}search/v3/global"
     PRODUCT_INFO_URL = f"{API_BASE_URL}product/detail?productCode={{}}"
     CURRENCY_URL = "https://wmsc.lcsc.com/wmsc/home/currency?currencyCode={}"
 
     def __init__(self, currency: str):
         self.session = retries.setup_session()
         self.session.headers.update(
-            {"User-Agent": UserAgent(os=["iOS"]).random, "Accept-Language": "en-US,en"}
+            {"User-Agent": UserAgent(os=["macos"]).random, "Accept-Language": "en-US,en",
+             "Referer": "https://www.lcsc.com/", "Origin": "https://www.lcsc.com"}
         )
         self.session.get(self.CURRENCY_URL.format(currency))
 
@@ -189,6 +203,7 @@ class LCSCApi:
 
 
 CLEANUP_URL_ID_REGEX = re.compile(r"[^\w\d\.]")
+LCSC_PART_NUMBER_REGEX = re.compile(r"^C\d+$", re.IGNORECASE)
 
 
 def cleanup_url_id(url: str):
