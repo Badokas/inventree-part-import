@@ -17,7 +17,7 @@ DigiKey, LCSC, Mouser, etc. into your InvenTree instance.
 For InvenTree 1.x, install this fork directly:
 
 ```console
-pipx install git+https://github.com/Badokas/inventree-part-import.git
+pipx install --include-deps git+https://github.com/Badokas/inventree-part-import.git
 ```
 
 Or with `uv`:
@@ -29,8 +29,12 @@ uv tool install git+https://github.com/Badokas/inventree-part-import.git
 If you already have the original installed, the `--force` flag will replace it:
 
 ```console
-pipx install --force git+https://github.com/Badokas/inventree-part-import.git
+pipx install --include-deps --force git+https://github.com/Badokas/inventree-part-import.git
 ```
+
+> **Note:** `--include-deps` is required because the package exposes its CLI entry point via
+> a dependency. Without it pipx will install the package but won't register the
+> `inventree-part-import` command.
 
 For InvenTree 0.x, use the [original package](https://pypi.org/project/inventree-part-import/) instead:
 
@@ -103,6 +107,26 @@ so:
 $ inventree-part-import parts.csv
 ```
 
+#### LCSC order CSV import
+
+LCSC order export CSVs (downloaded from the LCSC order history page) are supported directly.
+When the file contains both a `LCSC Part Number` column and a manufacturer part number column,
+the tool automatically uses the LCSC part number for LCSC lookups (direct product detail, no
+search required) while using the MPN for all other suppliers:
+
+```console
+$ inventree-part-import LCSC__WM2604130632_20260612145949.csv
+```
+
+You can also pass LCSC part numbers directly on the command line. They are routed exclusively
+to LCSC — other suppliers are not searched:
+
+```console
+$ inventree-part-import C375447 C96345 C2829970
+```
+
+For any other part number format, all configured suppliers are searched as normal.
+
 ## Configuration
 
 ### `inventree.yaml`
@@ -130,7 +154,7 @@ The following parameters have to be set:
   interactive part selection menu (any fields from the `ApiPart` dataclass can be used,
   defaults to: `"{MPN} | {manufacturer} | {SKU} | {supplier_link}"`)
 - `auto_detect_columns`: list of column names in tabular data files that will be automatically
-  detected (defaults to `["Manufacturer Part Number", "MPN", "part_id"]`)
+  detected (defaults to `["Manufacturer Part Number", "MPN", "part_id", "LCSC Part Number"]`)
 
 ### `suppliers.yaml`
 
