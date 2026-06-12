@@ -3,26 +3,26 @@ from base64 import urlsafe_b64encode
 from dataclasses import dataclass
 from functools import cache
 from hashlib import sha256
+from typing import Any
 
-import requests
 from error_helper import info, warning
 from fake_useragent import UserAgent
 from inventree.api import InvenTreeAPI
-from inventree.base import ImageMixin, InventreeObject
-from inventree.company import Company as InventreeCompany
-from inventree.company import ManufacturerPart, SupplierPart
-from inventree.part import ParameterTemplate, Part, PartCategory
+from inventree.base import ImageMixin, InventreeObject, ParameterTemplate
+from inventree.company import Company as InvenTreeCompany, ManufacturerPart, SupplierPart
+from inventree.part import Part, PartCategory
 from platformdirs import user_cache_path
 from requests.compat import unquote, urlparse
-from requests.exceptions import ConnectionError, HTTPError, Timeout
+from requests.exceptions import HTTPError
 
-from . import inventree_compat as _  # noqa: F401 - patches inventree URLs for InvenTree 1.x
-from .retries import retry_timeouts
+from .exceptions import InvenTreeObjectCreationError
+from .retries import setup_session
 
 INVENTREE_CACHE = user_cache_path(__package__, ensure_exists=True) / "inventree"
 INVENTREE_CACHE.mkdir(parents=True, exist_ok=True)
 
-def get_supplier_part(inventree_api: InvenTreeAPI, company: InventreeCompany, sku):
+
+def get_supplier_part(inventree_api: InvenTreeAPI, company: InvenTreeCompany, sku: str):
     supplier_parts = SupplierPart.list(inventree_api, SKU=sku)
     company_supplier_parts = [part for part in supplier_parts if part.supplier == company.pk]
     if len(company_supplier_parts) == 1:
@@ -31,7 +31,8 @@ def get_supplier_part(inventree_api: InvenTreeAPI, company: InventreeCompany, sk
     assert len(company_supplier_parts) == 0
     return None
 
-def get_manufacturer_part(inventree_api: InvenTreeAPI, mpn):
+
+def get_manufacturer_part(inventree_api: InvenTreeAPI, mpn: str):
     manufacturer_parts = ManufacturerPart.list(inventree_api, MPN=mpn)
     if len(manufacturer_parts) == 1:
         return manufacturer_parts[0]
@@ -39,7 +40,8 @@ def get_manufacturer_part(inventree_api: InvenTreeAPI, mpn):
     assert len(manufacturer_parts) == 0
     return None
 
-def get_part(inventree_api: InvenTreeAPI, name):
+
+def get_part(inventree_api: InvenTreeAPI, name: str):
     name_sanitized = FILTER_SPECIAL_CHARS_REGEX.sub(FILTER_SPECIAL_CHARS_SUB, name)
     parts = Part.list(inventree_api, name_regex=f"^{name_sanitized}$")
     if len(parts) == 1:
@@ -48,7 +50,8 @@ def get_part(inventree_api: InvenTreeAPI, name):
     assert len(parts) == 0
     return None
 
-def get_category(inventree_api: InvenTreeAPI, category_path):
+
+def get_category(inventree_api: InvenTreeAPI, category_path: str):
     name = category_path.split("/")[-1]
     for category in PartCategory.list(inventree_api, search=name):
         if category.pathstring == category_path:
@@ -56,18 +59,21 @@ def get_category(inventree_api: InvenTreeAPI, category_path):
 
     return None
 
-def get_category_parts(part_category: PartCategory, cascade):
+
+def get_category_parts(inventree_api: InvenTreeAPI, part_category: PartCategory, cascade: bool):
     return Part.list(
-        part_category._api,
+        inventree_api,
         category=part_category.pk,
         cascade=cascade,
         purchaseable=True,
     )
 
+
 FILTER_SPECIAL_CHARS_REGEX = re.compile(r"(?<!\\)([\[\].^$*+?{}|()])")
 FILTER_SPECIAL_CHARS_SUB = r"\\\g<1>"
 
-def update_object_data(obj: InventreeObject, data: dict, info_label=""):
+
+def update_object_data(obj: InventreeObject, data: dict[str, Any], info_label: str = ""):
     for name, value in data.items():
         try:
             if value == type(value)(obj[name]):
@@ -80,19 +86,17 @@ def update_object_data(obj: InventreeObject, data: dict, info_label=""):
         obj.save(data)
         return
 
-@cache
-def get_parameter_templates(inventree_api: InvenTreeAPI):
-    return {
-        parameter_template.name: parameter_template
-        for parameter_template in ParameterTemplate.list(inventree_api)
-    }
 
 @cache
-def create_manufacturer(inventree_api: InvenTreeAPI, name):
-    manufacturers = [
-        manufacturer for manufacturer in InventreeCompany.list(inventree_api, search=name)
-        if name.lower() == manufacturer.name.lower()
-    ]
+def get_parameter_templates(inventree_api: InvenTreeAPI):
+    templates = ParameterTemplate.list(inventree_api)
+    return {parameter_template.name: parameter_template for parameter_template in templates}
+
+
+@cache
+def create_manufacturer(inventree_api: InvenTreeAPI, name: str):
+    companies = InvenTreeCompany.list(inventree_api, search=name)
+    manufacturers = [company for company in companies if name.lower() == company.name.lower()]
     if len(manufacturers) == 1:
         manufacturer = manufacturers[0]
         if not manufacturer.is_manufacturer:
@@ -101,24 +105,18 @@ def create_manufacturer(inventree_api: InvenTreeAPI, name):
     assert len(manufacturers) == 0
 
     info(f"creating manufacturer '{name}' ...")
-    return InventreeCompany.create(inventree_api, {
+    manufacturer_data = {
         "name": name,
         "description": name,
         "is_manufacturer": True,
         "is_supplier": False,
         "is_customer": False,
-    })
+    }
+    if not (manufacturer := InvenTreeCompany.create(inventree_api, manufacturer_data)):
+        raise InvenTreeObjectCreationError(InvenTreeCompany)
 
-def download_image_content(api_object: ImageMixin):
-    if not api_object.image:
-        return b""
+    return manufacturer
 
-    api_image_path = INVENTREE_CACHE / f"api_image.{api_object.image.rsplit('.')[-1]}"
-    api_image_path.unlink(missing_ok=True)
-    api_object.downloadImage(str(api_image_path))
-
-    with open(api_image_path, "rb") as file:
-        return file.read()
 
 def upload_image(api_object: ImageMixin, image_url: str):
     info("uploading image ...")
@@ -139,7 +137,9 @@ def upload_image(api_object: ImageMixin, image_url: str):
     try:
         api_object.uploadImage(str(image_path))
     except HTTPError as e:
-        warning(f"failed to upload image with: {e.args[0]['body']}")
+        if (body := e.args[0]["body"]) != "DRY_RUN":
+            warning(f"failed to upload image with: {body}")
+
 
 def upload_datasheet(part: Part, datasheet_url: str):
     info("uploading datasheet ...")
@@ -162,63 +162,54 @@ def upload_datasheet(part: Part, datasheet_url: str):
     except HTTPError as e:
         warning(f"failed to upload datasheet with: {e.args[0]['body']}")
 
-def url2filename(url):
+
+def url2filename(url: str):
     parsed = urlparse(url)
     if "." not in parsed.path:
         parsed = urlparse(url.replace("https://", "scheme://"))
     return unquote(parsed.path.split("/")[-1])
 
-from ssl import PROTOCOL_TLSv1_2
-
-class TLSv1_2HTTPAdapter(requests.adapters.HTTPAdapter):
-    def init_poolmanager(self, connections, maxsize, block=False):
-        self.poolmanager = requests.packages.urllib3.poolmanager.PoolManager(
-            num_pools=connections,
-            maxsize=maxsize,
-            block=block,
-            ssl_version=PROTOCOL_TLSv1_2,
-        )
 
 @cache
-def _download_file_content(url):
-    session = requests.Session()
-    session.mount("https://", TLSv1_2HTTPAdapter())
-    session.headers.update({
-        "User-Agent": UserAgent(os=["iOS"]).random,
-        "Accept-Language": "en-US,en",
-    })
+def _download_file_content(url: str):
+    session = setup_session(use_tlsv1_2=True)
+    session.headers.update(
+        {
+            "User-Agent": UserAgent(os=["iOS"]).random,
+            "Accept-Language": "en-US,en",
+        }
+    )
 
+    result = session.get(url)
     try:
-        for retry in retry_timeouts():
-            with retry:
-                result = session.get(url)
-                result.raise_for_status()
-    except (ConnectionError, HTTPError, Timeout) as e:
+        result.raise_for_status()
+    except HTTPError as e:
         warning(f"failed to download file with '{e}'")
-        return None, None
+        return None, result.url
 
     return result.content, result.url
+
 
 @dataclass
 class Company:
     name: str
-    currency: str = None
+    currency: str | None = None
     is_supplier: bool = False
     is_manufacturer: bool = False
     is_customer: bool = False
-    primary_key: int = None
+    primary_key: int | None = None
 
-    def setup(self, inventree_api):
+    def setup(self, inventree_api: InvenTreeAPI):
         api_company = None
         if self.primary_key is not None:
             try:
-                api_company = InventreeCompany(inventree_api, self.primary_key)
+                api_company = InvenTreeCompany(inventree_api, self.primary_key)
             except HTTPError as e:
                 if not e.args or e.args[0].get("status_code") != 404:
                     raise e
 
         if not api_company:
-            api_companies = InventreeCompany.list(inventree_api, name=self.name)
+            api_companies = InvenTreeCompany.list(inventree_api, name=self.name)
             if len(api_companies) == 1:
                 api_company = api_companies[0]
 
@@ -234,10 +225,14 @@ class Company:
             return api_company
 
         info(f"creating supplier '{self.name}' ...")
-        return InventreeCompany.create(inventree_api, {
+        api_company_data = {
             "name": self.name,
             "currency": self.currency,
             "is_supplier": self.is_supplier,
             "is_manufacturer": self.is_manufacturer,
             "is_customer": self.is_customer,
-        })
+        }
+        if not (api_company := InvenTreeCompany.create(inventree_api, api_company_data)):
+            raise InvenTreeObjectCreationError(InvenTreeCompany)
+
+        return api_company
